@@ -1,0 +1,13 @@
+
+BUGS TO TEST:
+- Roughness and Sediemnt input edge cases
+	- decimals without 0 in front
+	- special characters & spaces within values
+	- r_0 and r_2 filled, not r_1 etc
+- Text input of file paths - works but does not pull files to detected files
+- Duplicate iterations of as built geometry, plan, flow files
+- No value output when 2 scenarios ran
+
+
+
+BUGS TO FIX: 
