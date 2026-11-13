@@ -264,18 +264,6 @@ Set in `config.py`:
 
 ---
 
-## Known Issues
-
-- Roughness and sediment input edge cases:
-  - Decimals without a 0 in front
-  - Special characters and spaces within values
-  - Non-consecutive columns filled (e.g. N_0 and N_2 filled, not N_1)
-- Typing a project folder path works, but the files don't show up in Detected files (only updates through Browse)
-- Duplicate iterations of as-built geometry, plan, and flow files
-- No values output when 2 scenarios were run
-
----
-
 ## Open Items and Known Limitations
 
 The following items are pending engineer input or future development:
