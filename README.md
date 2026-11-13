@@ -4,107 +4,171 @@
 
 ###Overview
 
-This script automates the creation, execution, and output extraction of HEC-RAS 1D steady-state models across a matrix of sediment accumulation and Manning's roughness scenarios for creek maintenance analysis. It is designed to process multiple maintenance reaches within a single creek model, generating 16 scenarios per reach (4 roughness values x 4 sediment depths) and producing a freeboard results table per reach.
+This program automates the creation, execution, and output extraction of HEC-RAS 1D steady-state models across a matrix of sediment accumulation and Manning's roughness scenarios for creek maintenance analysis. It is designed to process multiple maintenance reaches within a single creek model. Each reach can have up to 6 sediment depths and up to 6 roughness values, and every combination is run as its own scenario (up to 36 scenarios per reach).
 
-The script is organized into two sequential phases that run end to end without human intervention after startup:
+There are two ways to run it:
+
+- `app.py` -- a GUI so people without Python experience can set up and run the tool: pick the project folder, load or fill in HECSPECS, choose an output folder, and click Run.
+- `run_pipeline.py` -- the backend. The GUI calls it, or it can be run directly.
+
+The pipeline is organized into two sequential phases that run end to end without human intervention after startup:
 
 **PHASE ONE: Geometry and Plan File Creation** - Pure text file manipulation, no HEC-RAS connection required. Creates all scenario geometry files and associated plan files, organized into batch folders to avoid hitting the g99 geometry file ceiling.
 
-**PHASE TWO: Run and Extract** - Opens HEC-RAS once via the COM API, runs every scenario plan sequentially, extracts output variables at the representative cross section for each reach, and writes a results CSV per reach.
+**PHASE TWO: Run and Extract** - Computes every scenario plan through the HEC-RAS COM API and extracts output at every cross section, for every flow profile in the flow file.
+
+The original project files are never modified.
 
 ---------------
 
 ## Requirements
 
-- Python 3.11-3.13
+- Windows
+- HEC-RAS 6.0 installed and licensed, with the COM interface registered
+- HEC-RAS project must contain exactly one river and one reach (see Open Items)
+- Python 3.11 or 3.12 (3.13 is not compatible with pywin32)
 - pywin32
-- HEC-RAS 6.0 installed with COM interface registered
-- No other third-party libraries required
+
+It is recommended not to use HEC-RAS or heavy programs like Civil 3D or ArcMap while a run is going. Run from a project copy on the local C: drive when possible. The tool reads and rewrites many small files, which is much slower on a network drive, especially over VPN.
+
+---------------
+
+## Using the App
+
+The How to Use window opens when the app starts and can be reopened with the How to Use button in the top-right corner.
+
+1. **Run name** -- a short label used to name the results files.
+2. **Project folder** -- folder containing the HEC-RAS project. Must contain exactly one .prj. The app uses the lowest-numbered geometry (.g##), flow (.f##), and plan (.p##) files as the base files to build scenarios from. Only one flow file is used, but every profile in it is computed and extracted.
+3. **Detected files** -- shows which .prj/.g##/.f##/.p## files were found. Check these before running.
+4. **Output folder** -- where batch folders and results are written. Auto-fills to the project folder.
+5. **HECSPECS CSV** -- the reaches and scenarios to run. Either:
+   - **Browse** to an existing CSV, or
+   - **Fill In App...** to build it in a table in the app (Add Row, Remove Last Row, Save). This guarantees the headers are correct.
+
+   A green "Headers and values OK" message means the file is ready. A red message lists the columns that need fixing.
+6. **Run** -- starts the pipeline in the background. Progress streams into the log window and the window stays responsive.
+
+**Clear** resets the form. Closing the app during a run asks for confirmation first, since stopping mid-run can leave HEC-RAS in an inconsistent state.
+
+### What the App Does When Run Is Clicked
+
+1. Checks the run name, project folder, output folder, and HECSPECS file
+2. Re-detects the base project files
+3. Reads `CREEK_NAME` from the first row of HECSPECS (spaces replaced with underscores)
+4. Writes a temporary CreekLocations CSV with the creek name and the paths to the .prj, base geometry, flow, and plan files
+5. Validates and cleans HECSPECS and writes a temporary copy for the pipeline
+6. Starts `run_pipeline.py` with the run name and output folder
+7. Deletes both temporary CSVs when the run finishes
+
+### Base Plan File
+
+The base plan must be a plan saved by HEC-RAS 6.0. Each scenario plan is a copy of it with these lines changed:
+
+- `Plan Title=` -- scenario title
+- `Short Identifier=` -- last 16 characters of the scenario title
+- `Program Version=6.00`
+- `Geom File=` -- the scenario's geometry file
+- `Run HTab= 1` -- forces HEC-RAS to rebuild hydraulic property tables from the edited geometry. Without this, HEC-RAS can compute against cached tables from the base geometry and every scenario returns the same results.
+- `HDF Fixed Rows= 0` -- sizes the results array to the actual geometry. With fixed rows, cross sections beyond the original array size were silently missing from output.
+
+All other computation settings are preserved exactly as they appear in the base plan.
 
 ---------------
 
 ## Input Files
 
-### CreekLocations.csv
-
-One row per creek. Defines the source project files that the script copies from. Since only one creek is processed per run, this file will have one data row.
-
-Columns:
-
-- `CREEK_NAME` -- name of the creek, must match exactly what appears in HECSPECS.csv
-- `PRJ_PATH` -- full path to the base HEC-RAS project file (.prj)
-- `BASE_GEOM_PATH` -- full path to the base geometry file (.g##). This file is never modified by the script. All scenario geometries are derived from this file.
-- `BASE_FLOW_PATH` -- full path to the steady flow file (.f##). This file is copied unchanged into every batch folder. Flow conditions never change between scenarios.
-- `BASE_PLAN_PATH` -- full path to a valid HEC-RAS 6.0 plan file (.p##) to use as the template for all scenario plans. This must be a plan file that was saved by HEC-RAS 6.0 (Program Version=6.00), not an older version. The script overwrites Plan Title=, Short Identifier=, Program Version=, and Geom File= in each copy. All other computation settings are preserved exactly as they appear in this template.
-
-Example:
-
-|       CREEK_NAME       |        PRJ_PATH        |     BASE_GEOM_PATH     |     BASE_FLOW_PATH     |     BASE_PLAN_PATH     |
-|------------------------|------------------------|------------------------|------------------------|------------------------|
-|       Cold Creek       |   c:\path\creek.prj    |   c:\path\creek.g01    |   c:\path\creek.f01    |   c:\path\creek.p01    |
-
-
 ### HECSPECS.csv
 
-One row per maintenance reach. Each row defines one reach's station boundaries, roughness values, sediment depths, and profile index. Multiple rows can belong to the same creek.
+One row per maintenance reach. All columns must be present in the header, even if some sediment/roughness values are left blank.
 
 Columns:
 
-- `CREEK_NAME` -- must match exactly what appears in CreekLocations.csv
-- `CREEK_REACH` -- name of the maintenance reach (e.g. REACH 1A). Used as the scenario title component and results CSV filename. Must be unique within the creek.
+- `CREEK_NAME` -- name of the creek. Read from the first row and used in scenario titles.
+- `CREEK_REACH` -- name of the maintenance reach (e.g. REACH 1A). Used in scenario titles and results. Must be unique.
 - `DS_STATION` -- downstream station limit of the maintenance reach in feet. Only cross sections at or between DS_STATION and US_STATION receive sediment and roughness edits.
 - `US_STATION` -- upstream station limit of the maintenance reach in feet.
-- `REP_XS_STATION` -- currently loaded but not used for output extraction. The representative cross section is determined automatically by finding the cross section with the lowest bank elevation within the reach station limits.
-- `TOP_OF_BANK` -- currently loaded but not used for freeboard calculation. Top of bank is determined automatically from output variables LOB Elev (nVar=197) and ROB Elev (nVar=198).
-- `N_LOW`, `N_MID1`, `N_MID2`, `N_HIGH` -- four Manning's n values defining the roughness scenario matrix. Applied uniformly to all Manning's n triplets at every in-reach cross section.
-- `SED_0`, `SED_1`, `SED_2`, `SED_3` -- four sediment depth values in feet defining the sediment scenario matrix. Applied as absolute elevation (thalweg + sed_depth) at every in-reach cross section.
-- `LOS_PROFILE_INDEX` -- zero-based index of the Level of Service flow profile within the steady flow file. Used to select the correct profile when extracting output variables.
+- `REP_XS_STATION` -- representative cross section for the reach, entered by the user. Passed through to the results for use in the nomograph spreadsheet.
+- `TOP_OF_BANK` -- top of bank elevation for the reach, entered by the user. Passed through to the results.
+- `N_0` through `N_5` -- up to six Manning's n values. Blank cells are skipped. At least one is required per row. Applied to every Manning's n value at every in-reach cross section.
+- `SED_0` through `SED_5` -- up to six sediment depths in feet. Blank cells are skipped. At least one is required per row. Applied as absolute elevation (thalweg + sed_depth) at every in-reach cross section.
+
+Scenarios per reach = (number of n values) x (number of sediment depths).
 
 Example:
 
-|CREEK_NAME|CREEK_REACH|DS_STATION|US_STATION|REP_XS_STATION|TOP_OF_BANK|N_LOW|N_MID1|N_MID2|N_HIGH|SED_0|SED_1|SED_2|SED_3|LOS_PROFILE_INDEX|
-|-----------|-----------|---------|----------|--------------|-----------|-----|------|-------|-----|-----|-----|-----|-----|-----------------|
-|ColdCreek|REACH 1|0|6000|8000|10|0.035|0.05|0.07|0.1|0|2|4|6|1|
-|ColdCreek|REACH 2|6000|12000|8000|10|0.035|0.05|0.07|0.1|0|2|4|6|1|
-|ColdCreek|REACH 3|12000|15000|8000|10|0.035|0.05|0.07|0.1|0|2|4|6|1|
----
+|CREEK_NAME|CREEK_REACH|DS_STATION|US_STATION|REP_XS_STATION|TOP_OF_BANK|N_0|N_1|N_2|N_3|N_4|N_5|SED_0|SED_1|SED_2|SED_3|SED_4|SED_5|
+|----------|-----------|----------|----------|--------------|-----------|---|---|---|---|---|---|-----|-----|-----|-----|-----|-----|
+|LowerSilver|REACH 1|0|6000|3200|138.5|0.035|0.05|0.07|0.1|||0|2|4|6|||
+|LowerSilver|REACH 2|6000|12000|8100|141.2|0.035|0.05|0.07|0.1|||0|2|4|6|||
+
+### HECSPECS Validation
+
+Before a run, the app checks HECSPECS:
+
+- Every column except the N and SED columns must be filled in on every row
+- Each row needs at least one N value and at least one SED value
+- Numeric columns (stations, top of bank, N, SED) have any spaces inside the value removed automatically, e.g. `0.0 35` becomes `0.035`
+- Anything that still isn't a valid number blocks the run and is reported by column. It is not guessed at or changed.
+
+### CreekLocations.csv
+
+Generated automatically by the app from the selected project folder and HECSPECS. Only needs to be made by hand when running `run_pipeline.py` without the app.
+
+Columns:
+
+- `CREEK_NAME` -- name of the creek
+- `PRJ_PATH` -- full path to the base HEC-RAS project file (.prj)
+- `BASE_GEOM_PATH` -- full path to the base geometry file (.g##). Never modified. All scenario geometries are derived from this file.
+- `BASE_FLOW_PATH` -- full path to the steady flow file (.f##). Copied unchanged into every batch folder. Flow conditions never change between scenarios.
+- `BASE_PLAN_PATH` -- full path to the base plan file (.p##) used as the template for all scenario plans.
+
+---------------
 
 ## Output Structure
 
+All output goes to the output folder (the project folder by default).
+
 ### Batch Folders
 
-The script creates numbered batch folders inside the base project directory (e.g. `Batch1`, `Batch2`). The number of reaches per batch is calculated automatically as `floor((99 - base_geom_number) / 16)` to avoid exceeding the g99 geometry file ceiling. Each batch folder contains:
+Reaches are packed into numbered batch folders (`Batch1`, `Batch2`, etc.). Each batch can hold `99 - base_geom_number` scenarios. Reaches are added to a batch until the next reach's scenarios won't fit, then a new batch starts. If a single reach needs more scenarios than fit in one batch, the run stops with an error telling you to reduce its sediment or roughness values.
+
+Each batch folder contains:
 
 - A copy of the base prj, geometry, flow, and plan files
-- 16 scenario geometry files per reach (e.g. `LowerSilver.g05` through `LowerSilver.g20` for one reach starting from g04)
-- 16 scenario plan files per reach with matching numbering
-- One results CSV per reach (see below)
-
-The original project folder is never modified.
+- One geometry file and one plan file per scenario, registered in the batch prj
+- One results CSV per scenario per flow profile
 
 ### Scenario File Naming
 
 Scenario geometry and plan files are named by their extension number (e.g. `LowerSilver.g05`, `LowerSilver.p05`). The title inside each file identifies the scenario:
 
-{CREEK_NAME}_{CREEK_REACH}_n{n_value}_sed{sed_depth}ft
+{CREEK_NAME}_{CREEK_REACH}_sed{sed_depth}ft_n{n_value}
 
-Example: `LowerSilver_REACH 1A_n0.04_sed2.0ft`
+Spaces are replaced with underscores. Example: `LowerSilver_REACH_1A_sed2.0ft_n0.04`
 
-The plan file's `Short Identifier=` field uses the last 16 characters of the scenario title.
+### Per-Scenario Results
 
-### Results CSV
+One CSV per scenario per flow profile, written to the batch folder:
 
-One CSV per reach, named `{CREEK_NAME}_{CREEK_REACH}_results.csv`, written to the batch folder containing that reach's scenarios.
+{profile}_{scenario_title}.csv
+
+One row per cross section in the model. Structures (bridges, culverts, etc.) are skipped.
+
+### Combined Results
+
+One combined CSV per flow profile, written to the output folder:
+
+{profile}_{run_name}_ALL_RESULTS.csv
+
+Contains every scenario for every reach, sorted by reach (HECSPECS order), then sediment depth, then n value. Spaces in profile names are replaced with underscores.
 
 Columns:
 
-- `River_Sta` -- river station of the representative cross section, determined automatically as the cross section with the lowest bank elevation within the reach station limits
-- `Roughness` -- Manning's n value for this scenario
-- `Sediment` -- sediment depth in feet for this scenario
-- `Min_Ch_El` -- minimum channel elevation at the representative cross section (nVar=5)
-- `WS_Elev` -- computed water surface elevation at the representative cross section (nVar=2)
-- `Top_of_Bank` -- lowest bank elevation found within the reach station limits, from LOB Elev (nVar=197) and ROB Elev (nVar=198), constant across all 16 scenarios for a given reach
-- `Freeboard` -- Top_of_Bank minus WS_Elev in feet, negative values indicate overtopping
+- `REACH`, `SED_DEPTH`, `N_VALUE` -- the scenario
+- `TOP_OF_BANK`, `REP_XS_STATION` -- from HECSPECS for that reach
+- `River_Sta` -- cross section station
+- `Profile` -- flow profile name
+- HEC-RAS output variables (nVar code): W.S. Elev (2), Max Chl Dpth (4), Min Ch El (5), Q Total (9), Flow Area (10), W.P. Total (14), Top Wdth Act (29), Area (32), Mann Comp (47), Top Width (62), Shear Total (150), Shear LOB (151), Shear Chan (152), Shear ROB (153), Invert Slope (196), L. Freeboard (199), R. Freeboard (200), Levee El Left (201), Levee El Right (202), L. Levee Frbrd (205), R. Levee Frbrd (206), Mann Wtd Total (207), Top W Act Chan (226)
 
 ---
 
@@ -113,14 +177,13 @@ Columns:
 ### Phase 1 -- Geometry and Plan Creation
 
 1. Reads CreekLocations.csv and HECSPECS.csv
-2. Calculates batch size from the base geometry file number
-3. Groups all reaches into batches
+2. Reads flow profiles from the flow file's `Number of Profiles=` and `Profile Names=` lines and checks the count matches the number of names
+3. Packs reaches into batches
 4. For each batch:
-   - Creates the batch folder
-   - Copies base prj, geometry, flow, and plan files into it
-   - For each reach in the batch, loops through all 16 combinations of roughness and sediment depth using `itertools.product(sed_depths, n_values)` with sediment as the outer loop
-   - For each scenario, creates a geometry file by editing the base geometry in plain text (no HEC-RAS connection), then creates a plan file by copying the base plan and updating identifying fields
-   - Registers each geometry and plan file in the batch prj
+   - Creates the batch folder and copies in the base files (files already there are not overwritten)
+   - Checks for leftover geometry files (see Skip Logic and Pre-Run Checks)
+   - For each reach, loops through every sediment and roughness combination using `itertools.product(sed_depths, n_values)` with sediment as the outer loop
+   - For each scenario: registers the next geometry number in the prj, writes the scenario geometry, sets `Geom Title=`, registers the next plan number, and writes the scenario plan
 
 ### Geometry Editing
 
@@ -128,36 +191,88 @@ The geometry editor splits the file on the `Type RM Length L Ch R =` delimiter t
 
 For each in-reach cross section the editor:
 - Reads `#Sta/Elev=` data in 8-character fixed-width fields to collect all elevation values
-- Calculates thalweg as the global minimum elevation (see open items below)
+- Calculates thalweg as the global minimum elevation (see Open Items)
 - Inserts or replaces `Sediment Elevation=` after `Bank Sta=` with the value thalweg + sed_depth
-- Reads `#Mann=` header to get the triplet count, reads exactly `n_count * 3 * 8` characters of Manning's data, replaces n values at triplet positions 1, 4, 7... with the scenario n value, and writes back preserving original line structure
+- Reads `#Mann=` header to get the triplet count, reads exactly `n_count * 3 * 8` characters of Manning's data, replaces the n value in each triplet with the scenario n value, and writes back preserving original line structure
 
-### Skip Logic
+### Skip Logic and Pre-Run Checks
 
-Before creating any scenario, the script scans existing geometry file titles in the batch folder. Any scenario whose title already exists is skipped. This means the script can be stopped and restarted at any point without duplicating work or corrupting existing files.
+Before creating anything in a batch, the pipeline builds the full list of scenario titles the current HECSPECS should produce and compares it against the geometry titles already in the batch folder:
+
+- **Leftover files** -- if the folder has geometry files that don't match any expected scenario (e.g. from an earlier run with a different HECSPECS), the run stops with an error listing them. Clear or move that batch folder before running again.
+- **Existing scenarios** -- any scenario whose title already exists is skipped, so an interrupted run can be restarted without duplicating work.
+
+When registering files in the prj, references to geometry or plan files that no longer exist on disk are removed.
 
 ### Phase 2 -- Run and Extract
 
-1. Opens HEC-RAS once via `win32com.client.Dispatch("RAS60.HECRASController")`
-2. For each batch folder, opens the batch prj via `RC.Project_Open`
-3. Scans all plan files in the batch folder, groups them by HECSPECS reach based on title substring matching, skipping the base plan which does not match any scenario title
-4. For each reach group:
-   - Runs each of the 16 scenario plans sequentially
-   - Before each run, updates `Current Plan=` in the prj text directly and calls `RC.Plan_SetCurrent(plan_title)` via API
-   - Calls `RC.Compute_HideComputationWindow()` and `RC.Compute_CurrentPlan(0, None, True)`
-   - On the first completed run for each reach, calls `find_rep_xs_and_top_of_bank` which loops through every HEC-RAS reach in the river, filters nodes by DS_STATION/US_STATION, pulls LOB Elev and ROB Elev for each in-range node, and identifies the node with the lowest combined bank elevation as the representative cross section
-   - For every run, extracts WS Elev and Min Ch El at the representative cross section node
-   - Calculates freeboard as Top_of_Bank minus WS_Elev
-   - After all 16 scenarios for a reach complete, writes the results CSV
-5. Calls `RC.QuitRAS()` after all batches are complete
+HEC-RAS is opened once via `win32com.client.Dispatch`. For every scenario plan in every batch:
+
+1. Writes `Current Plan=` for that plan directly into the batch prj (text edit, no COM call)
+2. Opens the project fresh with `RC.Project_Open`
+3. Calls `RC.Compute_HideComputationWindow()` and `RC.Compute_CurrentPlan(0, None, True)`
+4. For each flow profile, gets all nodes with `Geometry_GetNodes` and pulls each output variable at each cross section with `Output_NodeOutput`
+
+One compute runs all profiles, so extraction just reads each profile's output from the same compute.
+
+If extraction fails for a plan or profile, it is logged and skipped and the run continues. Failures are listed at the end of the run. `RC.QuitRAS()` is called when the run finishes, even if there was an error.
+
+**Sticky COM API** -- HEC-RAS's COM functions hold on to state within a session. Switching plans with `Plan_SetCurrent` and reading output with `Output_ReachOutput` returned results from a previous plan instead of the current one. The pipeline gets around this by writing `Current Plan=` to the prj and reopening the project before every plan, so HEC-RAS re-reads the prj from disk each time. `Plan_SetCurrent` is no longer used. Do not change this back to a single-session loop.
+
+**Why Output_NodeOutput** -- the bulk outputs (`Output_ReachOutput` and the HDF Cross Section Attributes) capped at 127 entries including structures, so some cross sections were missing. Pulling node by node reaches every cross section.
+
+### Running Without the App
+
+python run_pipeline.py
+
+With no arguments, prompts for a run name and a y/n confirmation, and reads the input CSVs from the paths in `config.py`.
+
+python run_pipeline.py <run_name> <output_folder>
+
+With arguments, skips the prompts. A blank output folder uses the project folder. This is how the app calls it.
 
 ---
 
 ## Configuration
 
-`MAX_RUNS` near the top of the run phase controls how many scenario plans are computed before the script stops. Set to a small number like 2 for testing. Set to `None` to run everything with no limit.
+Set in `config.py`:
 
-`river_id = 1` is set at the top of the run phase. Since only one creek is processed per run, this is always 1. If a model with multiple rivers is ever encountered this will need to be updated.
+- `BASE_DIR` -- install location of the tool
+- `MODEL_PATH_CSV` -- path to CreekLocations.csv
+- `BATCH_SPECS_CSV` -- path to the HECSPECS CSV the pipeline reads
+- `RAS_COM_PROGID` -- HEC-RAS COM class (HEC-RAS 6.0)
+- `RIVER_ID`, `REACH_ID` -- river and reach extracted (1 and 1 for a single river/reach model)
+- `MAX_RUNS` -- stops after this many computes. Set to a small number like 2 for testing. Set to `None` to run everything with no limit.
+
+---
+
+## Project Structure
+
+- `app.py` -- GUI
+- `run_pipeline.py` -- pipeline entry point
+- `config.py` -- paths and settings
+- `src/hec_1Dsteady_pipeline/`
+  - `archiving.py` -- run name and y/n prompts when running without the app
+  - `batching.py` -- available file slots and packing reaches into batches
+  - `com_extract.py` -- output variable list and per-cross-section extraction
+  - `flow_parser.py` -- reads flow profiles from the flow file
+  - `folder_setup.py` -- creates batch folders and copies base files
+  - `geometry_editor.py` -- sediment elevation and Manning's n edits
+  - `io_loaders.py` -- loads CreekLocations and HECSPECS
+  - `plan_editor.py` -- creates scenario plans, finds and filters plans, checks existing titles
+  - `prj_editor.py` -- registers geometry/plan files and sets Current Plan in the prj
+
+---
+
+## Known Issues
+
+- Roughness and sediment input edge cases:
+  - Decimals without a 0 in front
+  - Special characters and spaces within values
+  - Non-consecutive columns filled (e.g. N_0 and N_2 filled, not N_1)
+- Typing a project folder path works, but the files don't show up in Detected files (only updates through Browse)
+- Duplicate iterations of as-built geometry, plan, and flow files
+- No values output when 2 scenarios were run
 
 ---
 
@@ -165,15 +280,13 @@ Before creating any scenario, the script scans existing geometry file titles in 
 
 The following items are pending engineer input or future development:
 
-- Culvert sediment fill via `Culvert Depth Blocked=` is not yet implemented. Currently only bounding cross sections receive sediment elevation edits. Whether this is sufficient for RCDP freeboard analysis at culverts is an open engineer question.
-- Thalweg is currently calculated as the global minimum elevation across all station-elevation points in a cross section. Filtering to elevations between bank stations only has been implemented but is tabled pending engineer confirmation that overbank elevations are always higher than channel elevations in SCVWD models.
-- The up/down index argument in `Output_NodeOutput` is hardcoded to 0 for all nodes including bridges. The correct value for bridge upstream and downstream faces is pending engineer clarification.
-- `REP_XS_STATION` and `TOP_OF_BANK` columns in HECSPECS.csv are loaded but not currently used. The script determines these automatically from output variables. Whether to cross-check against engineer-provided values is a future decision.
+- Only one river and one reach per HEC-RAS project is supported. Extraction uses `RIVER_ID` and `REACH_ID` from `config.py`, so in a model with more than one, everything except the first river/reach is silently missing from results.
+- Culvert sediment fill via `Culvert Depth Blocked=` is not yet implemented. Currently only cross sections receive sediment elevation edits. Whether this is sufficient for freeboard analysis at culverts is an open engineer question.
 - Structures beyond culverts (bridges, multiple openings, inline structures, lateral structures) have not been confirmed regarding whether sediment fill or roughness changes are needed beyond what bounding cross section edits already provide.
-- The profile selection is currently hardcoded via `LOS_PROFILE_INDEX` as a zero-based index into the flow file profiles. A flow file profile name picker with engineer confirmation prompt is planned but not yet implemented.
-- Results export currently contains only River_Sta, Roughness, Sediment, Min_Ch_El, WS_Elev, Top_of_Bank, and Freeboard. Additional output columns from the HEC-RAS output variable list will be added once the engineer specifies which variables are needed.
-- Multiple river support within a single geometry is partially handled -- `find_rep_xs_and_top_of_bank` loops through all HEC-RAS reaches automatically, but `river_id` is hardcoded to 1. A river selection prompt is planned.
-- PyInstaller packaging into a standalone .exe has not yet been implemented.
+- Thalweg is currently calculated as the global minimum elevation across all station-elevation points in a cross section. This assumes overbank elevations are always higher than channel elevations, which is pending engineer confirmation for SCVWD models.
+- The up/down index argument in `Output_NodeOutput` is hardcoded to 0. Structures are skipped, so this only matters if structure output is added later.
+- `REP_XS_STATION` and `TOP_OF_BANK` come from HECSPECS as entered and are not checked against the model.
+- The compute result is printed to the log but not checked. A failed compute still goes on to extraction.
 
 ---
 
