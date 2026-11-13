@@ -292,6 +292,5 @@ The following items are pending engineer input or future development:
 
 ## Key Source References
 
-- Breaking the HEC-RAS Code by Goodell -- Appendix A (HECRASController API functions and arguments), Appendix E (output variable nVar index numbers)
-- HEC-RAS 6.0 Users Manual -- Chapter 5 (geometry file structure, fixed sediment elevations, culvert Depth Blocked field, bounding cross section behavior for bridges and culverts)
-- HEC-RAS 6.0 geometry file format confirmed from real LowerPenitencia geometry file
+- Breaking the HEC-RAS Code by Goodell
+- HEC-RAS 6.0 Users Manual
